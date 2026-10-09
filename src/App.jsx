@@ -193,6 +193,8 @@ export default function App() {
   const [message, setMessage] = useState("Upload a CSV to populate the dashboard.");
   const [messageType, setMessageType] = useState("");
   const [isClassifying, setIsClassifying] = useState(false);
+  const [manualLabels, setManualLabels] = useState({});
+  const [verificationSampleIds, setVerificationSampleIds] = useState([]);
   const [filters, setFilters] = useState({ course:"", trainer:"", mode:"", sentiment:"", from:"", to:"", search:"" });
   const [page, setPage] = useState(1);
   const pageSize = 10;
@@ -255,17 +257,18 @@ export default function App() {
   }, [filtered]);
 
   const verification = useMemo(() => {
-    const eligible = filtered.filter(r=>r.verified && r.comparison !== null);
-    const correct = eligible.filter(r=>r.comparison === true).length;
-    const incorrectRows = eligible.filter(r=>r.comparison === false);
-    const sentimentRows = filtered.filter(r=>r.sentiment && r.manualSentiment);
-    const themeRows = filtered.filter(r=>r.theme && r.manualTheme);
-    const sentimentCorrect = sentimentRows.filter(r=>normalizeLabel(r.sentiment)===normalizeLabel(r.manualSentiment)).length;
-    const themeCorrect = themeRows.filter(r=>normalizeLabel(r.theme)===normalizeLabel(r.manualTheme)).length;
-    return { eligible, correct, incorrect: eligible.length-correct, incorrectRows,
-      accuracy: eligible.length ? correct/eligible.length*100 : null,
-      sentimentRows, sentimentCorrect, themeRows, themeCorrect };
-  }, [filtered]);
+    const sampleRows = rows.filter(r => verificationSampleIds.includes(r.id) && r.sentiment);
+    const eligible = sampleRows.filter(r => manualLabels[r.id]?.sentiment);
+    const correct = eligible.filter(r => normalizeLabel(r.sentiment) === normalizeLabel(manualLabels[r.id].sentiment)).length;
+    const incorrectRows = eligible.filter(r => normalizeLabel(r.sentiment) !== normalizeLabel(manualLabels[r.id].sentiment));
+    const themeRows = sampleRows.filter(r => manualLabels[r.id]?.theme && r.theme);
+    const themeCorrect = themeRows.filter(r => normalizeLabel(r.theme) === normalizeLabel(manualLabels[r.id].theme)).length;
+    return {
+      sampleRows, eligible, correct, incorrect: eligible.length - correct, incorrectRows,
+      accuracy: eligible.length ? correct / eligible.length * 100 : null,
+      sentimentRows: eligible, sentimentCorrect: correct, themeRows, themeCorrect
+    };
+  }, [rows, verificationSampleIds, manualLabels]);
 
   const insights = useMemo(() => {
     if (!filtered.length) return [];
@@ -297,6 +300,26 @@ export default function App() {
   function resetFilters() {
     setFilters({course:"",trainer:"",mode:"",sentiment:"",from:"",to:"",search:""});
     setPage(1);
+  }
+
+  function createVerificationSample() {
+    const candidates = rows.filter(r => r.sentiment && r.comments);
+    if (!candidates.length) {
+      setMessage("Run AI classification before creating a verification sample.");
+      setMessageType("error");
+      return;
+    }
+    const shuffled = [...candidates].sort(() => Math.random() - 0.5);
+    const sample = shuffled.slice(0, Math.min(50, candidates.length));
+    setVerificationSampleIds(sample.map(r => r.id));
+    setManualLabels({});
+  }
+
+  function updateManualLabel(id, field, value) {
+    setManualLabels(previous => ({
+      ...previous,
+      [id]: { ...(previous[id] || {}), [field]: value }
+    }));
   }
 
   async function classifyComments() {
@@ -513,17 +536,41 @@ export default function App() {
       </section>
 
       <section id="verification" className="dashboard-section">
-        <SectionHeading title="AI classification verification" subtitle="Evaluate predictions against independently recorded manual labels."/>
+        <SectionHeading title="AI classification verification" subtitle="Review a sample of AI-labelled comments and enter your own independent labels. Your source CSV stays unchanged."
+          right={<button className="button button-primary" disabled={!rows.some(r=>r.sentiment && r.comments)} onClick={createVerificationSample}>{verificationSampleIds.length ? "Generate new sample" : "Select 50 comments to verify"}</button>} />
         <div className="kpi-grid">
-          <StatCard label="Verified records" value={verification.eligible.length.toLocaleString()} note="Records with usable manual labels" symbol="✓" tone="blue"/>
-          <StatCard label="Correct predictions" value={verification.correct.toLocaleString()} note="Among verified records" symbol="✓" tone="teal"/>
-          <StatCard label="Verification accuracy" value={verification.accuracy===null?"—":`${verification.accuracy.toFixed(1)}%`} note="Correct ÷ verified × 100" symbol="%" tone="purple"/>
-          <StatCard label="Incorrect predictions" value={verification.incorrect.toLocaleString()} note="Investigate common error patterns" symbol="!" tone="orange"/>
+          <StatCard label="Verified records" value={verification.eligible.length.toLocaleString()} note="Sample rows with a human sentiment label" symbol="✓" tone="blue"/>
+          <StatCard label="Correct predictions" value={verification.correct.toLocaleString()} note="AI sentiment matches your label" symbol="✓" tone="teal"/>
+          <StatCard label="Verification accuracy" value={verification.accuracy===null?"—":`${verification.accuracy.toFixed(1)}%`} note="Correct ÷ manually labelled × 100" symbol="%" tone="purple"/>
+          <StatCard label="Incorrect predictions" value={verification.incorrect.toLocaleString()} note="Review these comments and labels" symbol="!" tone="orange"/>
         </div>
-        <div className="panel note-panel"><strong>How accuracy is calculated</strong><p>The app uses an explicit <code>verified_correct</code> column when available. Otherwise, it compares AI labels with manual labels, such as <code>sentiment</code> versus <code>manual_sentiment</code>. Unverified rows are excluded. Sentiment and theme accuracy are also reported separately.</p><p className="muted">{verification.sentimentRows.length?`Sentiment: ${verification.sentimentCorrect}/${verification.sentimentRows.length} correct (${(verification.sentimentCorrect/verification.sentimentRows.length*100).toFixed(1)}%). `:""}{verification.themeRows.length?`Theme: ${verification.themeCorrect}/${verification.themeRows.length} correct (${(verification.themeCorrect/verification.themeRows.length*100).toFixed(1)}%).`:""}{!verification.sentimentRows.length&&!verification.themeRows.length?"No matching AI/manual label pairs found. Add manual_sentiment and/or manual_theme, or verified_correct.":""}</p></div>
-        <div className="panel table-panel"><div className="panel-heading"><div><h3>Incorrect verified classifications</h3><p>Investigate mistakes and improve the AI prompt.</p></div></div><div className="table-scroll"><table><thead><tr><th>Comment</th><th>AI sentiment</th><th>Manual sentiment</th><th>AI theme</th><th>Manual theme</th><th>Verification</th></tr></thead><tbody>
-          {verification.incorrectRows.length?verification.incorrectRows.slice(0,100).map(r=><tr key={r.id}><td className="comment-cell">{r.comments||"—"}</td><td>{r.sentiment||"—"}</td><td>{r.manualSentiment||"—"}</td><td>{r.theme||"—"}</td><td>{r.manualTheme||"—"}</td><td><span className="tag incorrect">Incorrect</span></td></tr>):<tr><td colSpan="6" className="empty-cell">No incorrect verified classifications detected, or verification fields are not present.</td></tr>}
-        </tbody></table></div></div>
+        <div className="panel note-panel"><strong>How accuracy is calculated</strong>
+          <p>Upload your original CSV and run AI classification. Then select a sample and assign the correct sentiment yourself, independently of the AI prediction. Accuracy is calculated only for comments where you have saved a manual label.</p>
+          <p className="muted">{verificationSampleIds.length ? `Verification sample: ${verificationSampleIds.length} comments. Human sentiment labels entered: ${verification.eligible.length}. ${verification.themeRows.length ? `Manual themes entered: ${verification.themeRows.length}.` : "Theme accuracy is available when you also enter manual themes."}` : "No verification sample selected yet. Click “Select 50 comments to verify” after AI classification."}</p>
+        </div>
+        <div className="panel table-panel">
+          <div className="panel-heading"><div><h3>Manual verification sample</h3><p>Choose your own label for each comment. Do not copy the AI prediction unless you independently agree with it.</p></div></div>
+          <div className="table-scroll"><table><thead><tr><th>Feedback ID</th><th>Comment</th><th>AI sentiment</th><th>Your manual sentiment</th><th>AI theme</th><th>Your manual theme (optional)</th><th>Result</th></tr></thead><tbody>
+            {verification.sampleRows.length ? verification.sampleRows.map(r => {
+              const manual = manualLabels[r.id] || {};
+              const hasManual = Boolean(manual.sentiment);
+              const isCorrect = hasManual && normalizeLabel(r.sentiment) === normalizeLabel(manual.sentiment);
+              return <tr key={r.id}>
+                <td>{r.id}</td><td className="comment-cell">{r.comments}</td>
+                <td><span className={`tag ${r.sentimentKind}`}>{r.sentiment}</span></td>
+                <td><select aria-label={`Manual sentiment for ${r.id}`} value={manual.sentiment || ""} onChange={e=>updateManualLabel(r.id,"sentiment",e.target.value)}><option value="">Choose label…</option><option value="Positive">Positive</option><option value="Neutral">Neutral</option><option value="Negative">Negative</option></select></td>
+                <td>{r.theme || "—"}</td>
+                <td><input aria-label={`Manual theme for ${r.id}`} className="verification-input" placeholder="Optional theme" value={manual.theme || ""} onChange={e=>updateManualLabel(r.id,"theme",e.target.value)} /></td>
+                <td>{!hasManual ? <span className="tag other">Pending</span> : <span className={`tag ${isCorrect ? "correct" : "incorrect"}`}>{isCorrect ? "Correct" : "Incorrect"}</span>}</td>
+              </tr>;
+            }) : <tr><td colSpan="7" className="empty-cell">Run AI classification, then select a verification sample to start checking predictions.</td></tr>}
+          </tbody></table></div>
+        </div>
+        <div className="panel table-panel"><div className="panel-heading"><div><h3>Incorrect verified classifications</h3><p>Use these examples to identify recurring AI errors and improve the prompt.</p></div></div>
+          <div className="table-scroll"><table><thead><tr><th>Comment</th><th>AI sentiment</th><th>Manual sentiment</th><th>AI theme</th><th>Manual theme</th><th>Verification</th></tr></thead><tbody>
+            {verification.incorrectRows.length ? verification.incorrectRows.slice(0,100).map(r=><tr key={r.id}><td className="comment-cell">{r.comments||"—"}</td><td>{r.sentiment||"—"}</td><td>{manualLabels[r.id]?.sentiment||"—"}</td><td>{r.theme||"—"}</td><td>{manualLabels[r.id]?.theme||"—"}</td><td><span className="tag incorrect">Incorrect</span></td></tr>) : <tr><td colSpan="6" className="empty-cell">No incorrect manually verified classifications yet.</td></tr>}
+          </tbody></table></div>
+        </div>
       </section>
 
       <section id="records" className="dashboard-section">

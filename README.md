@@ -16,7 +16,7 @@ Create a key in Google AI Studio: https://aistudio.google.com/apikey
 Do not paste the key into `src/App.jsx`, commit it to GitHub, or share it in screenshots.
 
 ## 2. Configure Vercel
-1. Push this project to GitHub.
+1. Push the project in the app directory to GitHub.
 2. Import the repository into Vercel.
 3. In **Project Settings → Environment Variables**, add:
    - Name: `GEMINI_API_KEY`

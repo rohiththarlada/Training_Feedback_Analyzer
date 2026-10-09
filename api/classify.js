@@ -38,7 +38,7 @@ Rules:
 Comments:
 ${JSON.stringify(batch.map((comment, index) => ({ id: index + 1, comment })))}`;
 
-     
+      
       let upstream;
       let data = {};
       let lastError = "Gemini is temporarily unavailable.";
